@@ -396,9 +396,9 @@ func (r *VKSClusterReconciler) tenantRESTConfig(ctx context.Context, tcpNS, tcpK
 	}
 	// NodePort SANs on Multus path are brittle from the host; skip TLS verify
 	// for controller-side tenant API calls (join token, CNI apply, node Ready).
-	restCfg.TLSClientConfig.Insecure = true
-	restCfg.TLSClientConfig.CAData = nil
-	restCfg.TLSClientConfig.CAFile = ""
+	restCfg.Insecure = true
+	restCfg.CAData = nil
+	restCfg.CAFile = ""
 	return restCfg, nil
 }
 
