@@ -168,7 +168,9 @@ func (r *VKSClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		_ = unstructured.SetNestedField(tcp.Object, int64(port), "spec", "networkProfile", "port")
 		_ = unstructured.SetNestedMap(tcp.Object, map[string]any{}, "spec", "addons", "coreDNS")
 		_ = unstructured.SetNestedMap(tcp.Object, map[string]any{}, "spec", "addons", "kubeProxy")
-		_ = unstructured.SetNestedField(tcp.Object, int64(8132), "spec", "addons", "konnectivity", "server", "port")
+		// Konnectivity shares the TCP Service; with serviceType=NodePort the
+		// port becomes a nodePort and must be in 30000–32767 (not 8132).
+		_ = unstructured.SetNestedField(tcp.Object, int64(30132), "spec", "addons", "konnectivity", "server", "port")
 
 		if err := controllerutil.SetControllerReference(&cluster, tcp, r.Scheme); err != nil {
 			// Cross-namespace owner refs are not allowed; annotate instead.
