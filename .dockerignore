@@ -6,6 +6,9 @@
 !**/*.go
 **/*_test.go
 
+# Embedded CNI manifest
+!internal/controller/cni/kube-flannel.yml
+
 # Re-include Go module files
 !go.mod
 !go.sum
