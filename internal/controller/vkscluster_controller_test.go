@@ -28,6 +28,8 @@ import (
 	virtfoundryv1alpha1 "github.com/virtfoundry/vks/api/v1alpha1"
 )
 
+const testNS = "default"
+
 var _ = Describe("VKSCluster Controller", func() {
 	Context("When reconciling a resource", func() {
 		const resourceName = "test-cluster"
@@ -36,7 +38,7 @@ var _ = Describe("VKSCluster Controller", func() {
 
 		typeNamespacedName := types.NamespacedName{
 			Name:      resourceName,
-			Namespace: "default",
+			Namespace: testNS,
 		}
 
 		BeforeEach(func() {
@@ -47,7 +49,7 @@ var _ = Describe("VKSCluster Controller", func() {
 				resource = &virtfoundryv1alpha1.VKSCluster{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      resourceName,
-						Namespace: "default",
+						Namespace: testNS,
 					},
 					Spec: virtfoundryv1alpha1.VKSClusterSpec{
 						KubernetesVersion: "v1.36.5",
