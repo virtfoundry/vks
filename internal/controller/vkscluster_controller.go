@@ -51,8 +51,8 @@ const (
 	labelManaged  = "vks.virtfoundry.io/cluster"
 	labelWorker   = "vks.virtfoundry.io/worker"
 
-	partOfValue   = "virtfoundry-vks"
-	labelTrue     = "true"
+	partOfValue = "virtfoundry-vks"
+	labelTrue   = "true"
 	defaultName = "default"
 )
 
