@@ -70,8 +70,8 @@ jobs:
         run: |
           set -euo pipefail
           if [ -z "${ARGO_HOMELAB_TOKEN:-}" ]; then
-            echo "::error::Missing secret ARGO_HOMELAB_TOKEN (PAT with contents:write on ${ARGO_HOMELAB_REPO}). Argo will not pick up new image digests."
-            exit 1
+            echo "::warning::Missing secret ARGO_HOMELAB_TOKEN on virtfoundry/vks (contents:write on ${ARGO_HOMELAB_REPO}). Skipping digest pin — add the secret to enable write-back."
+            exit 0
           fi
           if [ -z "${IMAGE_DIGEST:-}" ]; then
             echo "::error::Missing image digest from build-push"
