@@ -54,6 +54,7 @@ const (
 	partOfValue = "virtfoundry-vks"
 	labelTrue   = "true"
 	defaultName = "default"
+	fieldName   = "name"
 )
 
 var (
@@ -404,8 +405,8 @@ func (r *VKSClusterReconciler) ensureWorkers(ctx context.Context, cluster *virtf
 			inst.SetLabels(labels)
 
 			_ = unstructured.SetNestedField(inst.Object, fmt.Sprintf("VKS %s worker %d", cluster.Name, i), "spec", "displayName")
-			_ = unstructured.SetNestedField(inst.Object, cluster.Spec.Workers.TemplateRef.Name, "spec", "templateRef", "name")
-			_ = unstructured.SetNestedField(inst.Object, cluster.Spec.Workers.OfferingRef.Name, "spec", "offeringRef", "name")
+			_ = unstructured.SetNestedField(inst.Object, cluster.Spec.Workers.TemplateRef.Name, "spec", "templateRef", fieldName)
+			_ = unstructured.SetNestedField(inst.Object, cluster.Spec.Workers.OfferingRef.Name, "spec", "offeringRef", fieldName)
 			_ = unstructured.SetNestedField(inst.Object, "Running", "spec", "powerState")
 			// Only set join userdata on create — mutating cloud-init on Running VMs causes churn.
 			existingUD, _, _ := unstructured.NestedString(inst.Object, "spec", "cloudInitUserData")
@@ -415,9 +416,9 @@ func (r *VKSClusterReconciler) ensureWorkers(ctx context.Context, cluster *virtf
 
 			nics := []any{
 				map[string]any{
-					"name": defaultName,
+					fieldName: defaultName,
 					"networkRef": map[string]any{
-						"name": cluster.Spec.Workers.NetworkRef.Name,
+						fieldName: cluster.Spec.Workers.NetworkRef.Name,
 					},
 				},
 			}
@@ -426,7 +427,7 @@ func (r *VKSClusterReconciler) ensureWorkers(ctx context.Context, cluster *virtf
 			if len(cluster.Spec.Workers.SSHKeyRefs) > 0 {
 				refs := make([]any, 0, len(cluster.Spec.Workers.SSHKeyRefs))
 				for _, ref := range cluster.Spec.Workers.SSHKeyRefs {
-					refs = append(refs, map[string]any{"name": ref.Name})
+					refs = append(refs, map[string]any{fieldName: ref.Name})
 				}
 				_ = unstructured.SetNestedSlice(inst.Object, refs, "spec", "sshKeyRefs")
 			}
@@ -445,7 +446,7 @@ func (r *VKSClusterReconciler) ensureWorkers(ctx context.Context, cluster *virtf
 		}
 	}
 
-	return r.countReadyWorkers(ctx, cluster, tcpNS, tcpKCSecret)
+	return r.countReadyWorkers(ctx, tcpNS, tcpKCSecret)
 }
 
 func (r *VKSClusterReconciler) joinMaterial(ctx context.Context, cluster *virtfoundryv1alpha1.VKSCluster, tcpNS, tcpKCSecret, endpoint string) (joinCmd, caHash string, err error) {
@@ -555,7 +556,7 @@ func (r *VKSClusterReconciler) buildJoinMaterial(ctx context.Context, tcpNS, tcp
 	return joinCmd, caHash, nil
 }
 
-func (r *VKSClusterReconciler) countReadyWorkers(ctx context.Context, cluster *virtfoundryv1alpha1.VKSCluster, tcpNS, tcpKCSecret string) (int32, error) {
+func (r *VKSClusterReconciler) countReadyWorkers(ctx context.Context, tcpNS, tcpKCSecret string) (int32, error) {
 	src := &corev1.Secret{}
 	if err := r.Get(ctx, types.NamespacedName{Namespace: tcpNS, Name: tcpKCSecret}, src); err != nil {
 		return 0, err
