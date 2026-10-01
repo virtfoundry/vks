@@ -36,6 +36,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -43,6 +44,7 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	virtfoundryv1alpha1 "github.com/virtfoundry/vks/api/v1alpha1"
+	"github.com/virtfoundry/vks/internal/controller/cni"
 )
 
 const (
@@ -86,7 +88,7 @@ type VKSClusterReconciler struct {
 // +kubebuilder:rbac:groups=virtfoundry.io,resources=vksclusters/finalizers,verbs=update
 // +kubebuilder:rbac:groups=virtfoundry.io,resources=instances,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=kamaji.clastix.io,resources=tenantcontrolplanes,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch;create
+// +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch;create;delete
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update;patch;delete
 
 func (r *VKSClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -235,6 +237,18 @@ func (r *VKSClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	})
 	r.setPhase(&cluster, virtfoundryv1alpha1.VKSClusterPhaseControlPlaneReady)
 
+	if err := r.ensureCNI(ctx, tcpNS, kcSecret); err != nil {
+		log.Error(err, "ensure CNI")
+		meta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
+			Type:    virtfoundryv1alpha1.ConditionWorkersReady,
+			Status:  metav1.ConditionFalse,
+			Reason:  "CNIError",
+			Message: err.Error(),
+		})
+		_ = r.Status().Update(ctx, &cluster)
+		return ctrl.Result{RequeueAfter: 15 * time.Second}, err
+	}
+
 	readyWorkers, err := r.ensureWorkers(ctx, &cluster, tcpNS, kcSecret, endpoint)
 	if err != nil {
 		log.Error(err, "ensure workers")
@@ -293,7 +307,7 @@ func (r *VKSClusterReconciler) reconcileDelete(ctx context.Context, cluster *vir
 	r.setPhase(cluster, virtfoundryv1alpha1.VKSClusterPhaseDeleting)
 	_ = r.Status().Update(ctx, cluster)
 
-	// Delete worker Instances first.
+	// Delete worker Instances first; wait until gone (KubeVirt finalizers).
 	var list unstructured.UnstructuredList
 	list.SetGroupVersionKind(schema.GroupVersionKind{Group: instanceGVK.Group, Version: instanceGVK.Version, Kind: instanceGVK.Kind + "List"})
 	if err := r.List(ctx, &list, client.InNamespace(cluster.Namespace), client.MatchingLabels{
@@ -323,21 +337,69 @@ func (r *VKSClusterReconciler) reconcileDelete(ctx context.Context, cluster *vir
 	tcp.SetGroupVersionKind(tcpGVK)
 	tcp.SetNamespace(tcpNS)
 	tcp.SetName(tcpName)
-	if err := r.Delete(ctx, tcp); err != nil && !apierrors.IsNotFound(err) {
-		log.Error(err, "delete TCP")
+	err := r.Get(ctx, types.NamespacedName{Namespace: tcpNS, Name: tcpName}, tcp)
+	switch {
+	case err == nil:
+		if err := r.Delete(ctx, tcp); err != nil && !apierrors.IsNotFound(err) {
+			log.Error(err, "delete TCP")
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+	case !apierrors.IsNotFound(err):
 		return ctrl.Result{}, err
 	}
 
-	kc := &corev1.Secret{}
-	kc.Name = cluster.Name + "-admin-kubeconfig"
-	kc.Namespace = cluster.Namespace
-	_ = r.Delete(ctx, kc)
+	for _, name := range []string{cluster.Name + "-admin-kubeconfig", cluster.Name + "-join"} {
+		sec := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: cluster.Namespace}}
+		if err := r.Delete(ctx, sec); err != nil && !apierrors.IsNotFound(err) {
+			return ctrl.Result{}, err
+		}
+	}
+
+	// Drop managed TCP namespace once empty of the control plane.
+	ns := &corev1.Namespace{}
+	if err := r.Get(ctx, types.NamespacedName{Name: tcpNS}, ns); err == nil {
+		if ns.Labels[labelPartOf] == partOfValue {
+			if err := r.Delete(ctx, ns); err != nil && !apierrors.IsNotFound(err) {
+				log.Error(err, "delete TCP namespace", "ns", tcpNS)
+			}
+		}
+	}
 
 	controllerutil.RemoveFinalizer(cluster, finalizerName)
 	if err := r.Update(ctx, cluster); err != nil {
 		return ctrl.Result{}, err
 	}
 	return ctrl.Result{}, nil
+}
+
+func (r *VKSClusterReconciler) ensureCNI(ctx context.Context, tcpNS, tcpKCSecret string) error {
+	restCfg, err := r.tenantRESTConfig(ctx, tcpNS, tcpKCSecret)
+	if err != nil {
+		return err
+	}
+	return cni.ApplyFlannel(ctx, restCfg)
+}
+
+func (r *VKSClusterReconciler) tenantRESTConfig(ctx context.Context, tcpNS, tcpKCSecret string) (*rest.Config, error) {
+	src := &corev1.Secret{}
+	if err := r.Get(ctx, types.NamespacedName{Namespace: tcpNS, Name: tcpKCSecret}, src); err != nil {
+		return nil, err
+	}
+	raw, ok := src.Data["admin.conf"]
+	if !ok || len(raw) == 0 {
+		return nil, fmt.Errorf("admin.conf missing in %s/%s", tcpNS, tcpKCSecret)
+	}
+	restCfg, err := clientcmd.RESTConfigFromKubeConfig(raw)
+	if err != nil {
+		return nil, err
+	}
+	// NodePort SANs on Multus path are brittle from the host; skip TLS verify
+	// for controller-side tenant API calls (join token, CNI apply, node Ready).
+	restCfg.Insecure = true
+	restCfg.CAData = nil
+	restCfg.CAFile = ""
+	return restCfg, nil
 }
 
 func (r *VKSClusterReconciler) ensureNamespace(ctx context.Context, name string, cluster *virtfoundryv1alpha1.VKSCluster) error {
@@ -488,18 +550,11 @@ func (r *VKSClusterReconciler) buildJoinMaterial(ctx context.Context, tcpNS, tcp
 	if err := r.Get(ctx, types.NamespacedName{Namespace: tcpNS, Name: tcpKCSecret}, src); err != nil {
 		return "", "", err
 	}
-	raw, ok := src.Data["admin.conf"]
-	if !ok || len(raw) == 0 {
-		return "", "", fmt.Errorf("admin.conf missing in %s/%s", tcpNS, tcpKCSecret)
-	}
 
-	restCfg, err := clientcmd.RESTConfigFromKubeConfig(raw)
+	restCfg, err := r.tenantRESTConfig(ctx, tcpNS, tcpKCSecret)
 	if err != nil {
 		return "", "", err
 	}
-	// Prefer insecure for NodePort SANs quirks during bootstrap token create from host.
-	restCfg.Insecure = true
-	restCfg.CAData = nil
 	cs, err := kubernetes.NewForConfig(restCfg)
 	if err != nil {
 		return "", "", err
@@ -507,7 +562,6 @@ func (r *VKSClusterReconciler) buildJoinMaterial(ctx context.Context, tcpNS, tcp
 
 	caPEM := src.Data["ca.crt"]
 	if len(caPEM) == 0 {
-		// Fall back to TCP CA secret.
 		caSec := &corev1.Secret{}
 		if err := r.Get(ctx, types.NamespacedName{Namespace: tcpNS, Name: strings.TrimSuffix(tcpKCSecret, "-admin-kubeconfig") + "-ca"}, caSec); err == nil {
 			caPEM = caSec.Data["ca.crt"]
@@ -559,17 +613,10 @@ func (r *VKSClusterReconciler) buildJoinMaterial(ctx context.Context, tcpNS, tcp
 }
 
 func (r *VKSClusterReconciler) countReadyWorkers(ctx context.Context, tcpNS, tcpKCSecret string) (int32, error) {
-	src := &corev1.Secret{}
-	if err := r.Get(ctx, types.NamespacedName{Namespace: tcpNS, Name: tcpKCSecret}, src); err != nil {
-		return 0, err
-	}
-	raw := src.Data["admin.conf"]
-	restCfg, err := clientcmd.RESTConfigFromKubeConfig(raw)
+	restCfg, err := r.tenantRESTConfig(ctx, tcpNS, tcpKCSecret)
 	if err != nil {
 		return 0, err
 	}
-	restCfg.Insecure = true
-	restCfg.CAData = nil
 	cs, err := kubernetes.NewForConfig(restCfg)
 	if err != nil {
 		return 0, err

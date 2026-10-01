@@ -10,6 +10,8 @@ on:
 env:
   REGISTRY: ghcr.io
   IMAGE: ghcr.io/virtfoundry/vks
+  ARGO_HOMELAB_REPO: Matheus-Thurler/argo-homelab
+  ARGO_VALUES_PATH: platform/vks/values-homelab.yaml
 
 permissions:
   contents: read
@@ -57,3 +59,71 @@ jobs:
           sbom: true
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # Pin digest in argo-homelab so Argo CD sees a Git change and rolls pods.
+      # Requires repo secret ARGO_HOMELAB_TOKEN (contents:write on Matheus-Thurler/argo-homelab).
+      - name: Pin image digest in argo-homelab
+        if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+        env:
+          ARGO_HOMELAB_TOKEN: ${{ secrets.ARGO_HOMELAB_TOKEN }}
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          if [ -z "${ARGO_HOMELAB_TOKEN:-}" ]; then
+            echo "::warning::Missing secret ARGO_HOMELAB_TOKEN on virtfoundry/vks (contents:write on ${ARGO_HOMELAB_REPO}). Skipping digest pin — add the secret to enable write-back."
+            exit 0
+          fi
+          if [ -z "${IMAGE_DIGEST:-}" ]; then
+            echo "::error::Missing image digest from build-push"
+            exit 1
+          fi
+
+          SHORT_SHA="${GITHUB_SHA:0:7}"
+          WORKDIR="${RUNNER_TEMP}/argo-homelab"
+          BASIC_AUTH="$(printf 'x-access-token:%s' "${ARGO_HOMELAB_TOKEN}" | base64 | tr -d '\n')"
+          git -c http.extraHeader="Authorization: Basic ${BASIC_AUTH}" \
+            clone --depth 1 "https://github.com/${ARGO_HOMELAB_REPO}.git" "$WORKDIR" \
+            || {
+              echo "::error::Clone of ${ARGO_HOMELAB_REPO} failed. Rotate ARGO_HOMELAB_TOKEN (contents:write on that repo)."
+              exit 1
+            }
+          cd "$WORKDIR"
+          git config user.name "virtfoundry-ci"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config --local http.https://github.com/.extraheader "Authorization: Basic ${BASIC_AUTH}"
+
+          export IMAGE_NAME="${IMAGE}"
+          python3 - <<'PY'
+          import os, pathlib, re
+          path = pathlib.Path(os.environ["ARGO_VALUES_PATH"])
+          text = path.read_text()
+          digest = os.environ["IMAGE_DIGEST"]
+          if not digest.startswith("sha256:"):
+              raise SystemExit(f"unexpected digest: {digest}")
+          out = re.sub(
+              r'(?m)^(\s*digest:\s*)["\']?sha256:[0-9a-f]+["\']?',
+              rf'\1"{digest}"',
+              text,
+              count=1,
+          )
+          if out == text:
+              # Allow first-time pin when digest key exists with empty value.
+              out = re.sub(
+                  r'(?m)^(\s*digest:\s*)["\']?["\']?\s*$',
+                  rf'\1"{digest}"',
+                  text,
+                  count=1,
+              )
+          if out == text:
+              raise SystemExit("values file unchanged — check image.digest key exists")
+          path.write_text(out)
+          print(f"pinned {os.environ['IMAGE_NAME']}@{digest}")
+          PY
+
+          git add "$ARGO_VALUES_PATH"
+          if git diff --cached --quiet; then
+            echo "No digest change; skipping commit"
+            exit 0
+          fi
+          git commit -m "chore(vks): pin image to ${SHORT_SHA}"
+          git push origin HEAD:main
