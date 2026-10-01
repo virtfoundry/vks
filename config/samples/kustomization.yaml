@@ -1,0 +1,4 @@
+## Append samples of your project ##
+resources:
+- virtfoundry_v1alpha1_vkscluster.yaml
+# +kubebuilder:scaffold:manifestskustomizesamples

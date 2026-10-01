@@ -1,0 +1,21 @@
+apiVersion: virtfoundry.io/v1alpha1
+kind: VKSCluster
+metadata:
+  name: demo
+  namespace: virtfoundry-tenant-default
+spec:
+  kubernetesVersion: v1.36.5
+  controlPlane:
+    serviceType: NodePort
+    address: 10.0.30.250
+    port: 30443
+  workers:
+    count: 1
+    templateRef:
+      name: ubuntu-node-1-36-5
+    offeringRef:
+      name: medium
+    networkRef:
+      name: default
+    # sshKeyRefs:
+    #   - name: my-ssh-key

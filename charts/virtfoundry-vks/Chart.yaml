@@ -1,0 +1,6 @@
+apiVersion: v2
+name: virtfoundry-vks
+description: VirtFoundry Kubernetes Service operator (VKSCluster)
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

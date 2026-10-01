@@ -1,0 +1,23 @@
+image:
+  repository: ghcr.io/virtfoundry/vks
+  tag: "" # set by Argo digest / CI
+  digest: "" # sha256:… preferred
+  pullPolicy: IfNotPresent
+
+replicaCount: 1
+
+# Default advertise address for Kamaji NodePort TCPs.
+nodeAddress: ""
+nodePort: 30443
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+
+serviceAccount:
+  create: true
+  name: vks-controller-manager
