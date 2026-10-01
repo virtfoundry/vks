@@ -50,6 +50,10 @@ const (
 	labelPartOf   = "app.kubernetes.io/part-of"
 	labelManaged  = "vks.virtfoundry.io/cluster"
 	labelWorker   = "vks.virtfoundry.io/worker"
+
+	partOfValue   = "virtfoundry-vks"
+	labelTrue     = "true"
+	defaultName = "default"
 )
 
 var (
@@ -149,11 +153,11 @@ func (r *VKSClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		if labels == nil {
 			labels = map[string]string{}
 		}
-		labels[labelPartOf] = "virtfoundry-vks"
+		labels[labelPartOf] = partOfValue
 		labels[labelManaged] = cluster.Namespace + "." + cluster.Name
 		tcp.SetLabels(labels)
 
-		_ = unstructured.SetNestedField(tcp.Object, "default", "spec", "dataStore")
+		_ = unstructured.SetNestedField(tcp.Object, defaultName, "spec", "dataStore")
 		_ = unstructured.SetNestedField(tcp.Object, int64(1), "spec", "controlPlane", "deployment", "replicas")
 		_ = unstructured.SetNestedField(tcp.Object, "NodePort", "spec", "controlPlane", "service", "serviceType")
 		_ = unstructured.SetNestedField(tcp.Object, ver, "spec", "kubernetes", "version")
@@ -161,8 +165,8 @@ func (r *VKSClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		_ = unstructured.SetNestedField(tcp.Object, "systemd", "spec", "kubernetes", "kubelet", "cgroupfs")
 		_ = unstructured.SetNestedField(tcp.Object, addr, "spec", "networkProfile", "address")
 		_ = unstructured.SetNestedField(tcp.Object, int64(port), "spec", "networkProfile", "port")
-		_ = unstructured.SetNestedMap(tcp.Object, map[string]interface{}{}, "spec", "addons", "coreDNS")
-		_ = unstructured.SetNestedMap(tcp.Object, map[string]interface{}{}, "spec", "addons", "kubeProxy")
+		_ = unstructured.SetNestedMap(tcp.Object, map[string]any{}, "spec", "addons", "coreDNS")
+		_ = unstructured.SetNestedMap(tcp.Object, map[string]any{}, "spec", "addons", "kubeProxy")
 		_ = unstructured.SetNestedField(tcp.Object, int64(8132), "spec", "addons", "konnectivity", "server", "port")
 
 		if err := controllerutil.SetControllerReference(&cluster, tcp, r.Scheme); err != nil {
@@ -291,7 +295,7 @@ func (r *VKSClusterReconciler) reconcileDelete(ctx context.Context, cluster *vir
 	list.SetGroupVersionKind(schema.GroupVersionKind{Group: instanceGVK.Group, Version: instanceGVK.Version, Kind: instanceGVK.Kind + "List"})
 	if err := r.List(ctx, &list, client.InNamespace(cluster.Namespace), client.MatchingLabels{
 		labelManaged: cluster.Name,
-		labelWorker:  "true",
+		labelWorker:  labelTrue,
 	}); err != nil {
 		return ctrl.Result{}, err
 	}
@@ -341,7 +345,7 @@ func (r *VKSClusterReconciler) ensureNamespace(ctx context.Context, name string,
 			ObjectMeta: metav1.ObjectMeta{
 				Name: name,
 				Labels: map[string]string{
-					labelPartOf:  "virtfoundry-vks",
+					labelPartOf:  partOfValue,
 					labelManaged: cluster.Namespace + "." + cluster.Name,
 				},
 			},
@@ -364,7 +368,7 @@ func (r *VKSClusterReconciler) copyKubeconfig(ctx context.Context, cluster *virt
 	}
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, dst, func() error {
 		dst.Labels = map[string]string{
-			labelPartOf:  "virtfoundry-vks",
+			labelPartOf:  partOfValue,
 			labelManaged: cluster.Name,
 		}
 		dst.Type = src.Type
@@ -381,7 +385,7 @@ func (r *VKSClusterReconciler) ensureWorkers(ctx context.Context, cluster *virtf
 	}
 
 	desired := int(cluster.Spec.Workers.Count)
-	for i := 0; i < desired; i++ {
+	for i := range desired {
 		name := fmt.Sprintf("%s-worker-%d", cluster.Name, i)
 		userData := cloudInitJoin(joinCmd)
 		inst := &unstructured.Unstructured{}
@@ -394,9 +398,9 @@ func (r *VKSClusterReconciler) ensureWorkers(ctx context.Context, cluster *virtf
 			if labels == nil {
 				labels = map[string]string{}
 			}
-			labels[labelPartOf] = "virtfoundry-vks"
+			labels[labelPartOf] = partOfValue
 			labels[labelManaged] = cluster.Name
-			labels[labelWorker] = "true"
+			labels[labelWorker] = labelTrue
 			inst.SetLabels(labels)
 
 			_ = unstructured.SetNestedField(inst.Object, fmt.Sprintf("VKS %s worker %d", cluster.Name, i), "spec", "displayName")
@@ -409,10 +413,10 @@ func (r *VKSClusterReconciler) ensureWorkers(ctx context.Context, cluster *virtf
 				_ = unstructured.SetNestedField(inst.Object, userData, "spec", "cloudInitUserData")
 			}
 
-			nics := []interface{}{
-				map[string]interface{}{
-					"name": "default",
-					"networkRef": map[string]interface{}{
+			nics := []any{
+				map[string]any{
+					"name": defaultName,
+					"networkRef": map[string]any{
 						"name": cluster.Spec.Workers.NetworkRef.Name,
 					},
 				},
@@ -420,9 +424,9 @@ func (r *VKSClusterReconciler) ensureWorkers(ctx context.Context, cluster *virtf
 			_ = unstructured.SetNestedSlice(inst.Object, nics, "spec", "nics")
 
 			if len(cluster.Spec.Workers.SSHKeyRefs) > 0 {
-				refs := make([]interface{}, 0, len(cluster.Spec.Workers.SSHKeyRefs))
+				refs := make([]any, 0, len(cluster.Spec.Workers.SSHKeyRefs))
 				for _, ref := range cluster.Spec.Workers.SSHKeyRefs {
-					refs = append(refs, map[string]interface{}{"name": ref.Name})
+					refs = append(refs, map[string]any{"name": ref.Name})
 				}
 				_ = unstructured.SetNestedSlice(inst.Object, refs, "spec", "sshKeyRefs")
 			}
@@ -465,7 +469,7 @@ func (r *VKSClusterReconciler) joinMaterial(ctx context.Context, cluster *virtfo
 		},
 	}
 	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, sec, func() error {
-		sec.Labels = map[string]string{labelPartOf: "virtfoundry-vks", labelManaged: cluster.Name}
+		sec.Labels = map[string]string{labelPartOf: partOfValue, labelManaged: cluster.Name}
 		sec.Type = corev1.SecretTypeOpaque
 		sec.Data = map[string][]byte{
 			"join-command": []byte(joinCmd),
@@ -572,11 +576,7 @@ func (r *VKSClusterReconciler) countReadyWorkers(ctx context.Context, cluster *v
 		return 0, err
 	}
 	var ready int32
-	prefix := cluster.Name + "-worker-"
 	for _, n := range nodes.Items {
-		if !strings.HasPrefix(n.Name, prefix) && !strings.Contains(n.Name, cluster.Name) {
-			// Count any Ready node for MVP (hostname may be instance name).
-		}
 		for _, c := range n.Status.Conditions {
 			if c.Type == corev1.NodeReady && c.Status == corev1.ConditionTrue {
 				ready++
@@ -584,7 +584,6 @@ func (r *VKSClusterReconciler) countReadyWorkers(ctx context.Context, cluster *v
 			}
 		}
 	}
-	_ = prefix
 	return ready, nil
 }
 
