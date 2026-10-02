@@ -81,6 +81,9 @@ type VKSClusterReconciler struct {
 	DefaultNodeAddress string
 	// DefaultNodePort is used when spec.controlPlane.port is zero.
 	DefaultNodePort int32
+	// LoadBalancerAddressPool is a MetalLB pool name applied to Kamaji LB Services
+	// (annotation metallb.universe.tf/address-pool). Empty = cluster default pool.
+	LoadBalancerAddressPool string
 }
 
 // +kubebuilder:rbac:groups=virtfoundry.io,resources=vksclusters,verbs=get;list;watch;create;update;patch;delete

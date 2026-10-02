@@ -75,7 +75,7 @@ func (r *VKSClusterReconciler) ensureControlPlane(
 	konnectivityPort := konnectivityServerPort(serviceType)
 
 	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, tcp, func() error {
-		return mutateTenantControlPlane(tcp, cluster, r.Scheme, serviceType, ver, addr, port, konnectivityPort)
+		return mutateTenantControlPlane(tcp, cluster, r.Scheme, serviceType, ver, addr, port, konnectivityPort, r.LoadBalancerAddressPool)
 	})
 	if err != nil {
 		log.Error(err, "ensure TenantControlPlane")
@@ -212,6 +212,7 @@ func mutateTenantControlPlane(
 	scheme *runtime.Scheme,
 	serviceType, ver, addr string,
 	port, konnectivityPort int32,
+	lbAddressPool string,
 ) error {
 	labels := tcp.GetLabels()
 	if labels == nil {
@@ -224,7 +225,12 @@ func mutateTenantControlPlane(
 	_ = unstructured.SetNestedField(tcp.Object, defaultName, "spec", "dataStore")
 	_ = unstructured.SetNestedField(tcp.Object, int64(1), "spec", "controlPlane", "deployment", "replicas")
 	_ = unstructured.SetNestedField(tcp.Object, serviceType, "spec", "controlPlane", "service", "serviceType")
-	// Intentionally no metallb.io/* annotations — unset = cluster default LB pool
+	// Optional MetalLB pool pin (homelab: homelab-mgmt on VLAN30 — WiFi-reachable).
+	if serviceType == serviceTypeLoadBalancer && lbAddressPool != "" {
+		_ = unstructured.SetNestedStringMap(tcp.Object, map[string]string{
+			"metallb.universe.tf/address-pool": lbAddressPool,
+		}, "spec", "controlPlane", "service", "additionalMetadata", "annotations")
+	}
 	_ = unstructured.SetNestedField(tcp.Object, ver, "spec", "kubernetes", "version")
 	_ = unstructured.SetNestedStringSlice(tcp.Object, []string{"InternalIP", "ExternalIP", "Hostname"}, "spec", "kubernetes", "kubelet", "preferredAddressTypes")
 	_ = unstructured.SetNestedField(tcp.Object, "systemd", "spec", "kubernetes", "kubelet", "cgroupfs")
