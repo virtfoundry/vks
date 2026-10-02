@@ -90,6 +90,7 @@ type VKSClusterReconciler struct {
 // +kubebuilder:rbac:groups=kamaji.clastix.io,resources=tenantcontrolplanes,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch;create;delete
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch
 
 func (r *VKSClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
@@ -118,112 +119,12 @@ func (r *VKSClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return ctrl.Result{}, err
 	}
 
-	addr := cluster.Spec.ControlPlane.Address
-	if addr == "" {
-		addr = r.DefaultNodeAddress
-	}
-	port := cluster.Spec.ControlPlane.Port
-	if port == 0 {
-		port = r.DefaultNodePort
-	}
-	if port == 0 {
-		port = 30443
-	}
-	if addr == "" {
-		r.setPhase(&cluster, virtfoundryv1alpha1.VKSClusterPhaseFailed)
-		meta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
-			Type:    virtfoundryv1alpha1.ConditionControlPlaneReady,
-			Status:  metav1.ConditionFalse,
-			Reason:  "MissingAddress",
-			Message: "spec.controlPlane.address or controller default --node-address is required for NodePort",
-		})
-		_ = r.Status().Update(ctx, &cluster)
-		return ctrl.Result{}, fmt.Errorf("control plane address not configured")
+	cp, result, err := r.ensureControlPlane(ctx, &cluster, tcpNS, tcpName)
+	if err != nil || !result.IsZero() {
+		return result, err
 	}
 
-	ver := cluster.Spec.KubernetesVersion
-	if !strings.HasPrefix(ver, "v") {
-		ver = "v" + ver
-	}
-
-	tcp := &unstructured.Unstructured{}
-	tcp.SetGroupVersionKind(tcpGVK)
-	tcp.SetNamespace(tcpNS)
-	tcp.SetName(tcpName)
-
-	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, tcp, func() error {
-		labels := tcp.GetLabels()
-		if labels == nil {
-			labels = map[string]string{}
-		}
-		labels[labelPartOf] = partOfValue
-		labels[labelManaged] = cluster.Namespace + "." + cluster.Name
-		tcp.SetLabels(labels)
-
-		_ = unstructured.SetNestedField(tcp.Object, defaultName, "spec", "dataStore")
-		_ = unstructured.SetNestedField(tcp.Object, int64(1), "spec", "controlPlane", "deployment", "replicas")
-		_ = unstructured.SetNestedField(tcp.Object, "NodePort", "spec", "controlPlane", "service", "serviceType")
-		_ = unstructured.SetNestedField(tcp.Object, ver, "spec", "kubernetes", "version")
-		_ = unstructured.SetNestedStringSlice(tcp.Object, []string{"InternalIP", "ExternalIP", "Hostname"}, "spec", "kubernetes", "kubelet", "preferredAddressTypes")
-		_ = unstructured.SetNestedField(tcp.Object, "systemd", "spec", "kubernetes", "kubelet", "cgroupfs")
-		_ = unstructured.SetNestedField(tcp.Object, addr, "spec", "networkProfile", "address")
-		_ = unstructured.SetNestedField(tcp.Object, int64(port), "spec", "networkProfile", "port")
-		_ = unstructured.SetNestedMap(tcp.Object, map[string]any{}, "spec", "addons", "coreDNS")
-		_ = unstructured.SetNestedMap(tcp.Object, map[string]any{}, "spec", "addons", "kubeProxy")
-		// Konnectivity shares the TCP Service; with serviceType=NodePort the
-		// port becomes a nodePort and must be in 30000–32767 (not 8132).
-		_ = unstructured.SetNestedField(tcp.Object, int64(30132), "spec", "addons", "konnectivity", "server", "port")
-
-		if err := controllerutil.SetControllerReference(&cluster, tcp, r.Scheme); err != nil {
-			// Cross-namespace owner refs are not allowed; annotate instead.
-			ann := tcp.GetAnnotations()
-			if ann == nil {
-				ann = map[string]string{}
-			}
-			ann["vks.virtfoundry.io/owner-namespace"] = cluster.Namespace
-			ann["vks.virtfoundry.io/owner-name"] = cluster.Name
-			tcp.SetAnnotations(ann)
-			tcp.SetOwnerReferences(nil)
-		}
-		return nil
-	})
-	if err != nil {
-		log.Error(err, "ensure TenantControlPlane")
-		return ctrl.Result{}, err
-	}
-
-	// Re-get TCP status
-	if err := r.Get(ctx, types.NamespacedName{Namespace: tcpNS, Name: tcpName}, tcp); err != nil {
-		return ctrl.Result{}, err
-	}
-
-	tcpStatus, _, _ := unstructured.NestedString(tcp.Object, "status", "kubernetesResources", "version", "status")
-	endpoint, _, _ := unstructured.NestedString(tcp.Object, "status", "controlPlaneEndpoint")
-	kcSecret, _, _ := unstructured.NestedString(tcp.Object, "status", "kubeconfig")
-	if kcSecret == "" {
-		kcSecret = tcpName + "-admin-kubeconfig"
-	}
-
-	cluster.Status.TCPNamespace = tcpNS
-	cluster.Status.TCPName = tcpName
-	cluster.Status.ControlPlaneEndpoint = endpoint
-	cluster.Status.ObservedGeneration = cluster.Generation
-
-	if tcpStatus != "Ready" || endpoint == "" {
-		r.setPhase(&cluster, virtfoundryv1alpha1.VKSClusterPhaseProvisioning)
-		meta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
-			Type:    virtfoundryv1alpha1.ConditionControlPlaneReady,
-			Status:  metav1.ConditionFalse,
-			Reason:  "WaitingTCP",
-			Message: fmt.Sprintf("TenantControlPlane %s/%s status=%q", tcpNS, tcpName, tcpStatus),
-		})
-		if err := r.Status().Update(ctx, &cluster); err != nil {
-			return ctrl.Result{}, err
-		}
-		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-	}
-
-	if err := r.copyKubeconfig(ctx, &cluster, tcpNS, kcSecret); err != nil {
+	if err := r.copyKubeconfig(ctx, &cluster, tcpNS, cp.kubeconfigSecret); err != nil {
 		log.Error(err, "copy kubeconfig")
 		return ctrl.Result{RequeueAfter: 5 * time.Second}, err
 	}
@@ -237,7 +138,7 @@ func (r *VKSClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	})
 	r.setPhase(&cluster, virtfoundryv1alpha1.VKSClusterPhaseControlPlaneReady)
 
-	if err := r.ensureCNI(ctx, tcpNS, kcSecret); err != nil {
+	if err := r.ensureCNI(ctx, tcpNS, cp.kubeconfigSecret); err != nil {
 		log.Error(err, "ensure CNI")
 		meta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
 			Type:    virtfoundryv1alpha1.ConditionWorkersReady,
@@ -249,7 +150,7 @@ func (r *VKSClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return ctrl.Result{RequeueAfter: 15 * time.Second}, err
 	}
 
-	readyWorkers, err := r.ensureWorkers(ctx, &cluster, tcpNS, kcSecret, endpoint)
+	readyWorkers, err := r.ensureWorkers(ctx, &cluster, tcpNS, cp.kubeconfigSecret, cp.endpoint)
 	if err != nil {
 		log.Error(err, "ensure workers")
 		meta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
