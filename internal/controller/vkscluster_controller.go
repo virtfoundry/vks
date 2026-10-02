@@ -147,6 +147,11 @@ func (r *VKSClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			Message: err.Error(),
 		})
 		_ = r.Status().Update(ctx, &cluster)
+		// Forbidden/NotFound often mean TCP admin RBAC still bootstrapping (esp. LB VIP path).
+		// RequeueAfter avoids reconcile error storms that starve worker create.
+		if apierrors.IsForbidden(err) || apierrors.IsNotFound(err) || apierrors.IsServiceUnavailable(err) {
+			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+		}
 		return ctrl.Result{RequeueAfter: 15 * time.Second}, err
 	}
 
