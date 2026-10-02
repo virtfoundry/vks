@@ -28,10 +28,10 @@ const (
 	serviceTypeLoadBalancer = "LoadBalancer"
 	serviceTypeNodePort     = "NodePort"
 
-	defaultLBPort         int32 = 443
-	defaultNodePort       int32 = 30443
-	konnectivityLBPort    int32 = 8132
-	konnectivityNodePort  int32 = 30132
+	defaultLBPort        int32 = 443
+	defaultNodePort      int32 = 30443
+	konnectivityLBPort   int32 = 8132
+	konnectivityNodePort int32 = 30132
 )
 
 // resolveServiceType returns LoadBalancer when unset (product default).
