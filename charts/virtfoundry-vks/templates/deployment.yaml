@@ -30,10 +30,17 @@ spec:
             - --node-address={{ .Values.nodeAddress }}
             {{- end }}
             - --node-port={{ .Values.nodePort }}
+            {{- if .Values.loadBalancerAddressPool }}
+            - --load-balancer-address-pool={{ .Values.loadBalancerAddressPool }}
+            {{- end }}
           env:
             {{- if .Values.nodeAddress }}
             - name: VKS_NODE_ADDRESS
               value: {{ .Values.nodeAddress | quote }}
+            {{- end }}
+            {{- if .Values.loadBalancerAddressPool }}
+            - name: VKS_LB_ADDRESS_POOL
+              value: {{ .Values.loadBalancerAddressPool | quote }}
             {{- end }}
           ports:
             - containerPort: 8081

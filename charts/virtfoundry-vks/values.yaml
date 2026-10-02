@@ -9,6 +9,8 @@ replicaCount: 1
 # Default advertise address for Kamaji NodePort TCPs.
 nodeAddress: ""
 nodePort: 30443
+# MetalLB pool for LoadBalancer TCPs (homelab: homelab-mgmt). Empty = cluster default.
+loadBalancerAddressPool: ""
 
 resources:
   requests:

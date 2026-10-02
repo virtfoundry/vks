@@ -63,6 +63,7 @@ func main() {
 	var enableHTTP2 bool
 	var nodeAddress string
 	var nodePort int
+	var lbAddressPool string
 	var tlsOpts []func(*tls.Config)
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
@@ -84,6 +85,8 @@ func main() {
 	flag.StringVar(&nodeAddress, "node-address", os.Getenv("VKS_NODE_ADDRESS"),
 		"Default NodePort advertise address for TenantControlPlanes (env VKS_NODE_ADDRESS).")
 	flag.IntVar(&nodePort, "node-port", 30443, "Default NodePort for TenantControlPlanes.")
+	flag.StringVar(&lbAddressPool, "load-balancer-address-pool", os.Getenv("VKS_LB_ADDRESS_POOL"),
+		"MetalLB address pool for LoadBalancer TenantControlPlanes (env VKS_LB_ADDRESS_POOL). Empty = cluster default.")
 	opts := zap.Options{
 		Development: true,
 	}
@@ -184,10 +187,11 @@ func main() {
 	}
 
 	if err := (&controller.VKSClusterReconciler{
-		Client:             mgr.GetClient(),
-		Scheme:             mgr.GetScheme(),
-		DefaultNodeAddress: nodeAddress,
-		DefaultNodePort:    int32(nodePort),
+		Client:                  mgr.GetClient(),
+		Scheme:                  mgr.GetScheme(),
+		DefaultNodeAddress:      nodeAddress,
+		DefaultNodePort:         int32(nodePort),
+		LoadBalancerAddressPool: lbAddressPool,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "vkscluster")
 		os.Exit(1)
