@@ -18,8 +18,10 @@ Phase 3 (operator façade). Phase 1 image + Phase 2 CAPI/Kamaji spike are done.
 ```bash
 make generate manifests
 make test
-make run  # needs kubeconfig + Kamaji CRDs; set --node-address=<worker InternalIP>
+make run  # needs kubeconfig + Kamaji CRDs (+ MetalLB for LoadBalancer VIP)
 ```
+
+Default CP is `serviceType: LoadBalancer` (VIP from cluster LB / MetalLB autoAssign; no pool annotation unless you pin). Lab escape hatch: `NodePort` + `--node-address`.
 
 Sample:
 

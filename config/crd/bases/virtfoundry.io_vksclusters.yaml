@@ -63,21 +63,26 @@ spec:
                 properties:
                   address:
                     description: |-
-                      Address advertised on the TCP (node InternalIP for NodePort).
-                      Empty = use controller flag/env default.
+                      Address advertised on the TCP.
+                      NodePort: node InternalIP (empty = controller --node-address).
+                      LoadBalancer: omit; operator fills from Service status.loadBalancer.ingress.
                     type: string
                   port:
-                    default: 30443
-                    description: Port is the NodePort (30000–32767) when ServiceType=NodePort.
+                    description: |-
+                      Port for the API Service.
+                      LoadBalancer default 443; NodePort default 30443 (must be 30000–32767).
                     format: int32
-                    maximum: 32767
-                    minimum: 30000
+                    maximum: 65535
+                    minimum: 1
                     type: integer
                   serviceType:
-                    default: NodePort
-                    description: ServiceType for the TCP API Service. MVP supports
-                      NodePort.
+                    default: LoadBalancer
+                    description: |-
+                      ServiceType for the TCP API Service.
+                      LoadBalancer (default): VIP from cluster LB (MetalLB autoAssign when unset — no pool pin).
+                      NodePort: lab/dev; requires address (spec or --node-address).
                     enum:
+                    - LoadBalancer
                     - NodePort
                     type: string
                 type: object

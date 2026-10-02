@@ -51,21 +51,24 @@ type VKSWorkersSpec struct {
 
 // VKSControlPlaneSpec configures the hosted Kamaji TenantControlPlane.
 type VKSControlPlaneSpec struct {
-	// ServiceType for the TCP API Service. MVP supports NodePort.
-	// +kubebuilder:validation:Enum=NodePort
-	// +kubebuilder:default=NodePort
+	// ServiceType for the TCP API Service.
+	// LoadBalancer (default): VIP from cluster LB (MetalLB autoAssign when unset — no pool pin).
+	// NodePort: lab/dev; requires address (spec or --node-address).
+	// +kubebuilder:validation:Enum=LoadBalancer;NodePort
+	// +kubebuilder:default=LoadBalancer
 	// +optional
 	ServiceType string `json:"serviceType,omitempty"`
 
-	// Address advertised on the TCP (node InternalIP for NodePort).
-	// Empty = use controller flag/env default.
+	// Address advertised on the TCP.
+	// NodePort: node InternalIP (empty = controller --node-address).
+	// LoadBalancer: omit; operator fills from Service status.loadBalancer.ingress.
 	// +optional
 	Address string `json:"address,omitempty"`
 
-	// Port is the NodePort (30000–32767) when ServiceType=NodePort.
-	// +kubebuilder:validation:Minimum=30000
-	// +kubebuilder:validation:Maximum=32767
-	// +kubebuilder:default=30443
+	// Port for the API Service.
+	// LoadBalancer default 443; NodePort default 30443 (must be 30000–32767).
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=65535
 	// +optional
 	Port int32 `json:"port,omitempty"`
 }

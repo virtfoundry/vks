@@ -5,10 +5,13 @@ metadata:
   namespace: virtfoundry-tenant-default
 spec:
   kubernetesVersion: v1.36.5
-  controlPlane:
-    serviceType: NodePort
-    address: 10.0.30.250
-    port: 30443
+  # controlPlane defaults: serviceType=LoadBalancer, port=443
+  # VIP from cluster LB (MetalLB autoAssign when unset — no pool pin).
+  # For lab NodePort instead:
+  # controlPlane:
+  #   serviceType: NodePort
+  #   address: 10.0.30.250
+  #   port: 30443
   workers:
     count: 1
     templateRef:

@@ -90,6 +90,7 @@ type VKSClusterReconciler struct {
 // +kubebuilder:rbac:groups=kamaji.clastix.io,resources=tenantcontrolplanes,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch;create;delete
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch
 
 func (r *VKSClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
@@ -118,27 +119,44 @@ func (r *VKSClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return ctrl.Result{}, err
 	}
 
-	addr := cluster.Spec.ControlPlane.Address
-	if addr == "" {
-		addr = r.DefaultNodeAddress
-	}
-	port := cluster.Spec.ControlPlane.Port
-	if port == 0 {
-		port = r.DefaultNodePort
-	}
-	if port == 0 {
-		port = 30443
-	}
-	if addr == "" {
+	serviceType := resolveServiceType(cluster.Spec.ControlPlane)
+	port, err := resolveAPIPort(cluster.Spec.ControlPlane, serviceType, r.DefaultNodePort)
+	if err != nil {
 		r.setPhase(&cluster, virtfoundryv1alpha1.VKSClusterPhaseFailed)
 		meta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
 			Type:    virtfoundryv1alpha1.ConditionControlPlaneReady,
 			Status:  metav1.ConditionFalse,
-			Reason:  "MissingAddress",
-			Message: "spec.controlPlane.address or controller default --node-address is required for NodePort",
+			Reason:  "InvalidPort",
+			Message: err.Error(),
 		})
 		_ = r.Status().Update(ctx, &cluster)
-		return ctrl.Result{}, fmt.Errorf("control plane address not configured")
+		return ctrl.Result{}, err
+	}
+
+	addr := cluster.Spec.ControlPlane.Address
+	if serviceType == serviceTypeNodePort {
+		if addr == "" {
+			addr = r.DefaultNodeAddress
+		}
+		if addr == "" {
+			r.setPhase(&cluster, virtfoundryv1alpha1.VKSClusterPhaseFailed)
+			meta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
+				Type:    virtfoundryv1alpha1.ConditionControlPlaneReady,
+				Status:  metav1.ConditionFalse,
+				Reason:  "MissingAddress",
+				Message: "spec.controlPlane.address or controller default --node-address is required for NodePort",
+			})
+			_ = r.Status().Update(ctx, &cluster)
+			return ctrl.Result{}, fmt.Errorf("control plane address not configured")
+		}
+	} else {
+		// LoadBalancer: prefer explicit pin; else VIP from Service (no MetalLB annots).
+		if addr == "" {
+			svc := &corev1.Service{}
+			if err := r.Get(ctx, types.NamespacedName{Namespace: tcpNS, Name: tcpName}, svc); err == nil {
+				addr = loadBalancerVIP(svc)
+			}
+		}
 	}
 
 	ver := cluster.Spec.KubernetesVersion
@@ -151,7 +169,9 @@ func (r *VKSClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	tcp.SetNamespace(tcpNS)
 	tcp.SetName(tcpName)
 
-	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, tcp, func() error {
+	konnectivityPort := konnectivityServerPort(serviceType)
+
+	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, tcp, func() error {
 		labels := tcp.GetLabels()
 		if labels == nil {
 			labels = map[string]string{}
@@ -162,17 +182,19 @@ func (r *VKSClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 
 		_ = unstructured.SetNestedField(tcp.Object, defaultName, "spec", "dataStore")
 		_ = unstructured.SetNestedField(tcp.Object, int64(1), "spec", "controlPlane", "deployment", "replicas")
-		_ = unstructured.SetNestedField(tcp.Object, "NodePort", "spec", "controlPlane", "service", "serviceType")
+		_ = unstructured.SetNestedField(tcp.Object, serviceType, "spec", "controlPlane", "service", "serviceType")
+		// Intentionally no metallb.io/* annotations — unset = cluster default LB pool
+		// (same as core EnsureLBService). Optional pin is future / user-side only.
 		_ = unstructured.SetNestedField(tcp.Object, ver, "spec", "kubernetes", "version")
 		_ = unstructured.SetNestedStringSlice(tcp.Object, []string{"InternalIP", "ExternalIP", "Hostname"}, "spec", "kubernetes", "kubelet", "preferredAddressTypes")
 		_ = unstructured.SetNestedField(tcp.Object, "systemd", "spec", "kubernetes", "kubelet", "cgroupfs")
-		_ = unstructured.SetNestedField(tcp.Object, addr, "spec", "networkProfile", "address")
+		if addr != "" {
+			_ = unstructured.SetNestedField(tcp.Object, addr, "spec", "networkProfile", "address")
+		}
 		_ = unstructured.SetNestedField(tcp.Object, int64(port), "spec", "networkProfile", "port")
 		_ = unstructured.SetNestedMap(tcp.Object, map[string]any{}, "spec", "addons", "coreDNS")
 		_ = unstructured.SetNestedMap(tcp.Object, map[string]any{}, "spec", "addons", "kubeProxy")
-		// Konnectivity shares the TCP Service; with serviceType=NodePort the
-		// port becomes a nodePort and must be in 30000–32767 (not 8132).
-		_ = unstructured.SetNestedField(tcp.Object, int64(30132), "spec", "addons", "konnectivity", "server", "port")
+		_ = unstructured.SetNestedField(tcp.Object, int64(konnectivityPort), "spec", "addons", "konnectivity", "server", "port")
 
 		if err := controllerutil.SetControllerReference(&cluster, tcp, r.Scheme); err != nil {
 			// Cross-namespace owner refs are not allowed; annotate instead.
@@ -190,6 +212,44 @@ func (r *VKSClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	if err != nil {
 		log.Error(err, "ensure TenantControlPlane")
 		return ctrl.Result{}, err
+	}
+
+	// LoadBalancer path A: wait VIP then patch networkProfile.address for cert SANs.
+	if serviceType == serviceTypeLoadBalancer && addr == "" {
+		svc := &corev1.Service{}
+		if err := r.Get(ctx, types.NamespacedName{Namespace: tcpNS, Name: tcpName}, svc); err != nil {
+			if !apierrors.IsNotFound(err) {
+				return ctrl.Result{}, err
+			}
+		} else {
+			addr = loadBalancerVIP(svc)
+		}
+		if addr == "" {
+			r.setPhase(&cluster, virtfoundryv1alpha1.VKSClusterPhaseProvisioning)
+			meta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
+				Type:    virtfoundryv1alpha1.ConditionControlPlaneReady,
+				Status:  metav1.ConditionFalse,
+				Reason:  "LoadBalancerPending",
+				Message: fmt.Sprintf("waiting for LoadBalancer VIP on Service %s/%s", tcpNS, tcpName),
+			})
+			cluster.Status.TCPNamespace = tcpNS
+			cluster.Status.TCPName = tcpName
+			cluster.Status.ObservedGeneration = cluster.Generation
+			if err := r.Status().Update(ctx, &cluster); err != nil {
+				return ctrl.Result{}, err
+			}
+			return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+		}
+		if err := r.Get(ctx, types.NamespacedName{Namespace: tcpNS, Name: tcpName}, tcp); err != nil {
+			return ctrl.Result{}, err
+		}
+		curAddr, _, _ := unstructured.NestedString(tcp.Object, "spec", "networkProfile", "address")
+		if curAddr != addr {
+			_ = unstructured.SetNestedField(tcp.Object, addr, "spec", "networkProfile", "address")
+			if err := r.Update(ctx, tcp); err != nil {
+				return ctrl.Result{}, err
+			}
+		}
 	}
 
 	// Re-get TCP status
