@@ -225,7 +225,11 @@ func mutateTenantControlPlane(
 	_ = unstructured.SetNestedField(tcp.Object, defaultName, "spec", "dataStore")
 	_ = unstructured.SetNestedField(tcp.Object, int64(1), "spec", "controlPlane", "deployment", "replicas")
 	_ = unstructured.SetNestedField(tcp.Object, serviceType, "spec", "controlPlane", "service", "serviceType")
-	// Optional MetalLB pool pin (homelab: homelab-mgmt on VLAN30 — WiFi-reachable).
+	// VIP-only exposure: do not also open NodePorts on every principal-cluster node.
+	if serviceType == serviceTypeLoadBalancer {
+		_ = unstructured.SetNestedField(tcp.Object, false, "spec", "controlPlane", "service", "allocateLoadBalancerNodePorts")
+	}
+	// Optional MetalLB pool pin (install overlay). Product default is cluster autoAssign.
 	if serviceType == serviceTypeLoadBalancer && lbAddressPool != "" {
 		_ = unstructured.SetNestedStringMap(tcp.Object, map[string]string{
 			"metallb.universe.tf/address-pool": lbAddressPool,
