@@ -71,6 +71,12 @@ type VKSControlPlaneSpec struct {
 	// +kubebuilder:validation:Maximum=65535
 	// +optional
 	Port int32 `json:"port,omitempty"`
+
+	// AddressPool is a MetalLB IPAddressPool name for LoadBalancer CPs
+	// (annotation metallb.universe.tf/address-pool). Overrides the controller
+	// --load-balancer-address-pool flag. Empty = flag, then cluster autoAssign.
+	// +optional
+	AddressPool string `json:"addressPool,omitempty"`
 }
 
 // VKSClusterSpec defines the desired state of VKSCluster.

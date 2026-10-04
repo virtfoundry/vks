@@ -67,6 +67,12 @@ spec:
                       NodePort: node InternalIP (empty = controller --node-address).
                       LoadBalancer: omit; operator fills from Service status.loadBalancer.ingress.
                     type: string
+                  addressPool:
+                    description: |-
+                      AddressPool is a MetalLB IPAddressPool name for LoadBalancer CPs
+                      (annotation metallb.universe.tf/address-pool). Overrides the controller
+                      --load-balancer-address-pool flag. Empty = flag, then cluster autoAssign.
+                    type: string
                   port:
                     description: |-
                       Port for the API Service.

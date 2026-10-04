@@ -7,6 +7,9 @@ spec:
   kubernetesVersion: v1.36.5
   # controlPlane defaults: serviceType=LoadBalancer, port=443
   # VIP from cluster LB (MetalLB autoAssign when unset — no pool pin).
+  # Pin a pool per cluster (overrides controller --load-balancer-address-pool):
+  # controlPlane:
+  #   addressPool: homelab-public
   # For lab NodePort instead:
   # controlPlane:
   #   serviceType: NodePort
