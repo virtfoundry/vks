@@ -74,8 +74,9 @@ func (r *VKSClusterReconciler) ensureControlPlane(
 	tcp.SetName(tcpName)
 	konnectivityPort := konnectivityServerPort(serviceType)
 
+	pool := resolveAddressPool(cluster.Spec.ControlPlane, r.LoadBalancerAddressPool)
 	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, tcp, func() error {
-		return mutateTenantControlPlane(tcp, cluster, r.Scheme, serviceType, ver, addr, port, konnectivityPort, r.LoadBalancerAddressPool)
+		return mutateTenantControlPlane(tcp, cluster, r.Scheme, serviceType, ver, addr, port, konnectivityPort, pool)
 	})
 	if err != nil {
 		log.Error(err, "ensure TenantControlPlane")
@@ -204,6 +205,13 @@ func (r *VKSClusterReconciler) waitLoadBalancerVIP(
 		}
 	}
 	return ctrl.Result{}, nil
+}
+
+func resolveAddressPool(spec virtfoundryv1alpha1.VKSControlPlaneSpec, defaultPool string) string {
+	if p := strings.TrimSpace(spec.AddressPool); p != "" {
+		return p
+	}
+	return strings.TrimSpace(defaultPool)
 }
 
 func mutateTenantControlPlane(

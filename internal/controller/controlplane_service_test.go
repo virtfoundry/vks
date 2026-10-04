@@ -27,6 +27,12 @@ import (
 	virtfoundryv1alpha1 "github.com/virtfoundry/vks/api/v1alpha1"
 )
 
+const (
+	testK8sVersion = "v1.36.5"
+	testPoolMgmt   = "homelab-mgmt"
+	testPoolPublic = "homelab-public"
+)
+
 func TestResolveServiceType(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -107,14 +113,14 @@ func TestMutateTenantControlPlane_LBDoesNotAllocateNodePorts(t *testing.T) {
 	}
 	cluster := &virtfoundryv1alpha1.VKSCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "demo", Namespace: "tenant-a"},
-		Spec:       virtfoundryv1alpha1.VKSClusterSpec{KubernetesVersion: "v1.36.5"},
+		Spec:       virtfoundryv1alpha1.VKSClusterSpec{KubernetesVersion: testK8sVersion},
 	}
 	tcp := &unstructured.Unstructured{Object: map[string]any{}}
 	tcp.SetGroupVersionKind(tcpGVK)
 	tcp.SetName("demo")
 	tcp.SetNamespace("kamaji")
 
-	if err := mutateTenantControlPlane(tcp, cluster, scheme, serviceTypeLoadBalancer, "v1.36.5", "10.0.50.110", 443, 8132, ""); err != nil {
+	if err := mutateTenantControlPlane(tcp, cluster, scheme, serviceTypeLoadBalancer, testK8sVersion, "10.0.50.110", 443, 8132, ""); err != nil {
 		t.Fatal(err)
 	}
 	alloc, found, err := unstructured.NestedBool(tcp.Object, "spec", "controlPlane", "service", "allocateLoadBalancerNodePorts")
@@ -128,10 +134,58 @@ func TestMutateTenantControlPlane_LBDoesNotAllocateNodePorts(t *testing.T) {
 
 	tcpNP := &unstructured.Unstructured{Object: map[string]any{}}
 	tcpNP.SetGroupVersionKind(tcpGVK)
-	if err := mutateTenantControlPlane(tcpNP, cluster, scheme, serviceTypeNodePort, "v1.36.5", "10.0.30.250", 30443, 30132, ""); err != nil {
+	if err := mutateTenantControlPlane(tcpNP, cluster, scheme, serviceTypeNodePort, testK8sVersion, "10.0.30.250", 30443, 30132, ""); err != nil {
 		t.Fatal(err)
 	}
 	if _, found, _ := unstructured.NestedBool(tcpNP.Object, "spec", "controlPlane", "service", "allocateLoadBalancerNodePorts"); found {
 		t.Fatal("NodePort must not set allocateLoadBalancerNodePorts (Kamaji CEL)")
+	}
+}
+
+func TestResolveAddressPool(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		cr, flag, want string
+	}{
+		{"", "", ""},
+		{"", testPoolMgmt, testPoolMgmt},
+		{testPoolPublic, testPoolMgmt, testPoolPublic},
+		{"  " + testPoolPublic + "  ", testPoolMgmt, testPoolPublic},
+	}
+	for _, tc := range cases {
+		got := resolveAddressPool(virtfoundryv1alpha1.VKSControlPlaneSpec{AddressPool: tc.cr}, tc.flag)
+		if got != tc.want {
+			t.Fatalf("cr=%q flag=%q: got %q want %q", tc.cr, tc.flag, got, tc.want)
+		}
+	}
+}
+
+func TestMutateTenantControlPlane_LBPinsAddressPool(t *testing.T) {
+	t.Parallel()
+	scheme := runtime.NewScheme()
+	if err := virtfoundryv1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	cluster := &virtfoundryv1alpha1.VKSCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "demo", Namespace: "tenant-a"},
+		Spec:       virtfoundryv1alpha1.VKSClusterSpec{KubernetesVersion: testK8sVersion},
+	}
+	tcp := &unstructured.Unstructured{Object: map[string]any{}}
+	tcp.SetGroupVersionKind(tcpGVK)
+	if err := mutateTenantControlPlane(tcp, cluster, scheme, serviceTypeLoadBalancer, testK8sVersion, "", 443, 8132, testPoolPublic); err != nil {
+		t.Fatal(err)
+	}
+	ann, found, err := unstructured.NestedStringMap(tcp.Object, "spec", "controlPlane", "service", "additionalMetadata", "annotations")
+	if err != nil || !found || ann["metallb.universe.tf/address-pool"] != testPoolPublic {
+		t.Fatalf("pool annotation=%v found=%v err=%v", ann, found, err)
+	}
+
+	tcpEmpty := &unstructured.Unstructured{Object: map[string]any{}}
+	tcpEmpty.SetGroupVersionKind(tcpGVK)
+	if err := mutateTenantControlPlane(tcpEmpty, cluster, scheme, serviceTypeLoadBalancer, testK8sVersion, "", 443, 8132, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, found, _ := unstructured.NestedStringMap(tcpEmpty.Object, "spec", "controlPlane", "service", "additionalMetadata", "annotations"); found {
+		t.Fatal("empty pool must not pin metallb annotation")
 	}
 }

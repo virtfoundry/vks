@@ -52,7 +52,7 @@ var _ = Describe("VKSCluster Controller", func() {
 						Namespace: testNS,
 					},
 					Spec: virtfoundryv1alpha1.VKSClusterSpec{
-						KubernetesVersion: "v1.36.5",
+						KubernetesVersion: testK8sVersion,
 						ControlPlane: virtfoundryv1alpha1.VKSControlPlaneSpec{
 							ServiceType: "NodePort",
 							Address:     "10.0.30.250",
