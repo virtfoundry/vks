@@ -86,7 +86,8 @@ func main() {
 		"Default NodePort advertise address for TenantControlPlanes (env VKS_NODE_ADDRESS).")
 	flag.IntVar(&nodePort, "node-port", 30443, "Default NodePort for TenantControlPlanes.")
 	flag.StringVar(&lbAddressPool, "load-balancer-address-pool", os.Getenv("VKS_LB_ADDRESS_POOL"),
-		"Default MetalLB pool for LoadBalancer TenantControlPlanes when spec.controlPlane.addressPool is empty (env VKS_LB_ADDRESS_POOL).")
+		"Default MetalLB pool for LoadBalancer CPs when "+
+			"spec.controlPlane.addressPool is empty (env VKS_LB_ADDRESS_POOL).")
 	opts := zap.Options{
 		Development: true,
 	}
