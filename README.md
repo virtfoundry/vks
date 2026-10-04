@@ -21,7 +21,7 @@ make test
 make run  # needs kubeconfig + Kamaji CRDs (+ MetalLB for LoadBalancer VIP)
 ```
 
-Default CP is `serviceType: LoadBalancer` (VIP from cluster LB / MetalLB autoAssign; no pool annotation unless you pin). Lab escape hatch: `NodePort` + `--node-address`.
+Default CP is `serviceType: LoadBalancer` (VIP from cluster LB / MetalLB autoAssign; no pool annotation unless you pin). LoadBalancer Services do not allocate NodePorts on principal-cluster nodes. Lab escape hatch: `NodePort` + `--node-address`.
 
 Sample:
 

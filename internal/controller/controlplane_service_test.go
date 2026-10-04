@@ -20,6 +20,9 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 
 	virtfoundryv1alpha1 "github.com/virtfoundry/vks/api/v1alpha1"
 )
@@ -93,5 +96,42 @@ func TestLoadBalancerVIP(t *testing.T) {
 	svc.Status.LoadBalancer.Ingress = []corev1.LoadBalancerIngress{{Hostname: "vip.example"}}
 	if got := loadBalancerVIP(svc); got != "vip.example" {
 		t.Fatalf("got %q", got)
+	}
+}
+
+func TestMutateTenantControlPlane_LBDoesNotAllocateNodePorts(t *testing.T) {
+	t.Parallel()
+	scheme := runtime.NewScheme()
+	if err := virtfoundryv1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	cluster := &virtfoundryv1alpha1.VKSCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "demo", Namespace: "tenant-a"},
+		Spec:       virtfoundryv1alpha1.VKSClusterSpec{KubernetesVersion: "v1.36.5"},
+	}
+	tcp := &unstructured.Unstructured{Object: map[string]any{}}
+	tcp.SetGroupVersionKind(tcpGVK)
+	tcp.SetName("demo")
+	tcp.SetNamespace("kamaji")
+
+	if err := mutateTenantControlPlane(tcp, cluster, scheme, serviceTypeLoadBalancer, "v1.36.5", "10.0.50.110", 443, 8132, ""); err != nil {
+		t.Fatal(err)
+	}
+	alloc, found, err := unstructured.NestedBool(tcp.Object, "spec", "controlPlane", "service", "allocateLoadBalancerNodePorts")
+	if err != nil || !found || alloc {
+		t.Fatalf("allocateLoadBalancerNodePorts=%v found=%v err=%v", alloc, found, err)
+	}
+	st, _, _ := unstructured.NestedString(tcp.Object, "spec", "controlPlane", "service", "serviceType")
+	if st != serviceTypeLoadBalancer {
+		t.Fatalf("serviceType=%q", st)
+	}
+
+	tcpNP := &unstructured.Unstructured{Object: map[string]any{}}
+	tcpNP.SetGroupVersionKind(tcpGVK)
+	if err := mutateTenantControlPlane(tcpNP, cluster, scheme, serviceTypeNodePort, "v1.36.5", "10.0.30.250", 30443, 30132, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, found, _ := unstructured.NestedBool(tcpNP.Object, "spec", "controlPlane", "service", "allocateLoadBalancerNodePorts"); found {
+		t.Fatal("NodePort must not set allocateLoadBalancerNodePorts (Kamaji CEL)")
 	}
 }
