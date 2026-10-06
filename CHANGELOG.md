@@ -6,6 +6,10 @@ Format based on [Keep a Changelog](https://keepachangelog.com/). Versioning alig
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking:** the `virtfoundry-vks` chart no longer ships the `VKSCluster` CRD. It moves to the `virtfoundry-crds` chart in [helm-charts](https://github.com/virtfoundry/helm-charts), which syncs it from `config/crd/bases` (the source of truth, unchanged). Install `virtfoundry-crds` first. See [CRDs and upgrades](https://virtfoundry.github.io/helm-charts/docs/guide/crds/).
+
 ### Added
 
 - Release workflow publishes the `virtfoundry-vks` chart as an OCI artifact (`oci://ghcr.io/virtfoundry/charts`) on tags, so the platform umbrella chart can depend on it.
