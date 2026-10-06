@@ -6,6 +6,10 @@ Format based on [Keep a Changelog](https://keepachangelog.com/). Versioning alig
 
 ## [Unreleased]
 
+### Added
+
+- Release workflow publishes the `virtfoundry-vks` chart as an OCI artifact (`oci://ghcr.io/virtfoundry/charts`) on tags, so the platform umbrella chart can depend on it.
+
 ## [0.10.0] - 2026-10-06
 
 First tagged release. The chart version moves from the untagged `0.1.0` to the product line so it matches core and operator.
