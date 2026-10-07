@@ -22,6 +22,6 @@ spec:
     offeringRef:
       name: medium
     networkRef:
-      name: default
+      name: default-default   # Network CR name: <vpc>-<network>
     # sshKeyRefs:
     #   - name: my-ssh-key
