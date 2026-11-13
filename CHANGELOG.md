@@ -8,6 +8,11 @@ Format based on [Keep a Changelog](https://keepachangelog.com/). Versioning alig
 
 ## [0.13.0] - 2026-11-13
 
+### Fixed
+
+- The control-plane namespace carries a hash of `<namespace>/<name>`, so `a-b`+`c` and `a`+`b-c` no longer collide; a cluster refuses a namespace owned by another cluster and deletes only its own. Existing clusters get the new namespace name on the next reconcile.
+- The `<cluster>-join` Secret records `expires-at` and is regenerated with less than 1h left, so workers added after the 24h token expiry can join ([#34](https://github.com/virtfoundry/vks/pull/34)).
+
 ### Changed
 
 - Version aligned with the VirtFoundry 0.13.0 release.
