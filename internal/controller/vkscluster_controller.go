@@ -268,7 +268,7 @@ func (r *VKSClusterReconciler) reconcileDelete(ctx context.Context, cluster *vir
 	// Drop managed TCP namespace once empty of the control plane.
 	ns := &corev1.Namespace{}
 	if err := r.Get(ctx, types.NamespacedName{Name: tcpNS}, ns); err == nil {
-		if ns.Labels[labelPartOf] == partOfValue {
+		if ns.Labels[labelPartOf] == partOfValue && ns.Labels[labelManaged] == cluster.Namespace+"."+cluster.Name {
 			if err := r.Delete(ctx, ns); err != nil && !apierrors.IsNotFound(err) {
 				log.Error(err, "delete TCP namespace", "ns", tcpNS)
 			}
@@ -326,7 +326,13 @@ func (r *VKSClusterReconciler) ensureNamespace(ctx context.Context, name string,
 		}
 		return r.Create(ctx, ns)
 	}
-	return err
+	if err != nil {
+		return err
+	}
+	if owner := cluster.Namespace + "." + cluster.Name; ns.Labels[labelManaged] != owner {
+		return fmt.Errorf("namespace %s is not owned by VKSCluster %s", name, owner)
+	}
+	return nil
 }
 
 func (r *VKSClusterReconciler) copyKubeconfig(ctx context.Context, cluster *virtfoundryv1alpha1.VKSCluster, tcpNS, srcSecret string) error {
@@ -425,7 +431,7 @@ func (r *VKSClusterReconciler) ensureWorkers(ctx context.Context, cluster *virtf
 func (r *VKSClusterReconciler) joinMaterial(ctx context.Context, cluster *virtfoundryv1alpha1.VKSCluster, tcpNS, tcpKCSecret, endpoint string) (joinCmd, caHash string, err error) {
 	stored := &corev1.Secret{}
 	err = r.Get(ctx, types.NamespacedName{Namespace: cluster.Namespace, Name: cluster.Name + "-join"}, stored)
-	if err == nil && len(stored.Data["join-command"]) > 0 && len(stored.Data["ca-hash"]) > 0 {
+	if err == nil && len(stored.Data["join-command"]) > 0 && len(stored.Data["ca-hash"]) > 0 && joinTokenFresh(stored.Data["expires-at"], time.Now()) {
 		return string(stored.Data["join-command"]), string(stored.Data["ca-hash"]), nil
 	}
 	if err != nil && !apierrors.IsNotFound(err) {
@@ -448,6 +454,7 @@ func (r *VKSClusterReconciler) joinMaterial(ctx context.Context, cluster *virtfo
 		sec.Data = map[string][]byte{
 			"join-command": []byte(joinCmd),
 			"ca-hash":      []byte(caHash),
+			"expires-at":   []byte(time.Now().UTC().Add(joinTokenTTL).Format(time.RFC3339)),
 		}
 		return controllerutil.SetControllerReference(cluster, sec, r.Scheme)
 	})
@@ -490,7 +497,7 @@ func (r *VKSClusterReconciler) buildJoinMaterial(ctx context.Context, tcpNS, tcp
 		return "", "", err
 	}
 	token := tokenID + "." + tokenSecret
-	exp := time.Now().UTC().Add(24 * time.Hour).Format(time.RFC3339)
+	exp := time.Now().UTC().Add(joinTokenTTL).Format(time.RFC3339)
 
 	sec := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
@@ -554,6 +561,18 @@ runcmd:
 `, joinCmd)
 }
 
+// joinTokenTTL is the bootstrap token lifetime; the stored join Secret is
+// regenerated once less than joinTokenMargin remains (or if it has no expiry).
+const (
+	joinTokenTTL    = 24 * time.Hour
+	joinTokenMargin = time.Hour
+)
+
+func joinTokenFresh(expiresAt []byte, now time.Time) bool {
+	t, err := time.Parse(time.RFC3339, string(expiresAt))
+	return err == nil && t.Sub(now) > joinTokenMargin
+}
+
 func tcpNamespaceFor(cluster *virtfoundryv1alpha1.VKSCluster) string {
 	// Host namespace: vks-<tenant>-<name> truncated to 63.
 	tenant := cluster.Namespace
@@ -566,10 +585,14 @@ func tcpNamespaceFor(cluster *virtfoundryv1alpha1.VKSCluster) string {
 		}
 		return '-'
 	}, ns)
-	if len(ns) > 63 {
-		ns = ns[:63]
+	// "vks-a-b"+"c" and "vks-a"+"b-c" would collide: a hash of the real
+	// namespace/name keeps the host namespace one-to-one with the cluster.
+	sum := sha256.Sum256([]byte(cluster.Namespace + "/" + cluster.Name))
+	suffix := "-" + hex.EncodeToString(sum[:3])
+	if len(ns) > 63-len(suffix) {
+		ns = ns[:63-len(suffix)]
 	}
-	return strings.Trim(ns, "-")
+	return strings.Trim(ns, "-") + suffix
 }
 
 func (r *VKSClusterReconciler) setPhase(cluster *virtfoundryv1alpha1.VKSCluster, phase virtfoundryv1alpha1.VKSClusterPhase) {
