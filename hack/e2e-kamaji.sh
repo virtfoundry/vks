@@ -13,7 +13,8 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 : "${HELM_CHARTS_DIR:?set HELM_CHARTS_DIR to a helm-charts checkout}"
 VKS_IMG="${VKS_IMG:-virtfoundry-vks:e2e}"
 CERT_MANAGER_VERSION="${CERT_MANAGER_VERSION:-v1.16.2}"
-KAMAJI_CHART_VERSION="${KAMAJI_CHART_VERSION:-1.0.0}"
+# The published Helm chart caps tenant Kubernetes at 1.30; the edge chart in git does not.
+KAMAJI_REF="${KAMAJI_REF:-7a53df4a6db4e7feebe07e9856f3c173731bdfd5}"
 KIND_NODE="${KIND_NODE:-e2e-control-plane}"
 K8S_VERSION="${K8S_VERSION:-v1.36.5}"
 NS=virtfoundry-system
@@ -60,11 +61,14 @@ echo "==> cert-manager $CERT_MANAGER_VERSION"
 kubectl apply -f "https://github.com/cert-manager/cert-manager/releases/download/${CERT_MANAGER_VERSION}/cert-manager.yaml"
 kubectl -n cert-manager wait --for=condition=Available deploy --all --timeout=300s
 
-echo "==> Kamaji chart $KAMAJI_CHART_VERSION"
-helm repo add clastix https://clastix.github.io/charts >/dev/null
-helm repo update clastix >/dev/null
-helm upgrade --install kamaji clastix/kamaji --version "$KAMAJI_CHART_VERSION" \
+echo "==> Kamaji edge chart @ ${KAMAJI_REF:0:12}"
+KAMAJI_SRC="$(mktemp -d)"
+git clone -q https://github.com/clastix/kamaji.git "$KAMAJI_SRC"
+git -C "$KAMAJI_SRC" checkout -q "$KAMAJI_REF"
+helm dependency update "$KAMAJI_SRC/charts/kamaji" >/dev/null
+helm upgrade --install kamaji "$KAMAJI_SRC/charts/kamaji" \
   --namespace kamaji-system --create-namespace --wait --timeout 10m
+kubectl apply --server-side --force-conflicts -f "$KAMAJI_SRC/charts/kamaji/crds/"
 wait_for "default DataStore" 300 kubectl get datastore default
 kubectl get datastore
 
