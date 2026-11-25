@@ -20,5 +20,5 @@ jobs:
           go-version-file: go.mod
       - name: Test
         run: |
-          go mod tidy
+          go mod tidy -diff
           make test
